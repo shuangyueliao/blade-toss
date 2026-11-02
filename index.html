@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="description" content="Blade Toss — throw knives into the spinning log. Time your throws, burst the log, grab apples, survive the boss. Free HTML5 game.">
+<title>Blade Toss — Knife Throwing Game</title>
+<script>
+// 平台 SDK 按域名条件加载（独立运行时完全不加载，游戏行为不变）
+(function () {
+  var host = location.hostname || "";
+  try {
+    if (host.indexOf("crazygames") !== -1) {
+      var s1 = document.createElement("script");
+      s1.src = "https://sdk.crazygames.com/crazygames-sdk-v3.js";
+      s1.onload = function () {
+        if (window.CrazyGames && window.CrazyGames.SDK) {
+          window.CrazyGames.SDK.init().then(function () {
+            try { window.CrazyGames.SDK.game.loadingStart(); } catch (e) {}
+            window.addEventListener("load", function () { try { window.CrazyGames.SDK.game.loadingStop(); } catch (e) {} });
+          }).catch(function () {});
+        }
+      };
+      document.head.appendChild(s1);
+      window.__portal = "crazygames";
+    } else if (host.indexOf("gamedistribution") !== -1 || host.indexOf("html5.gamedistribution.com") !== -1 || host.indexOf("gd.games") !== -1) {
+      var s2 = document.createElement("script");
+      s2.src = "https://sdk.gamedistribution.com/v2/main.min.js";
+      document.head.appendChild(s2);
+      window.__portal = "gamedistribution";
+    }
+  } catch (e) {}
+})();
+</script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; background:#120d08; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  #wrap { height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  #hud { width:100%; max-width:480px; display:flex; justify-content:space-between; align-items:center; padding:10px 14px 6px; color:#f0e6d8; }
+  .stat { text-align:center; }
+  .stat .label { font-size:10px; color:#9a8a72; letter-spacing:1px; }
+  .stat .val { font-size:20px; font-weight:800; }
+  #title { font-size:14px; font-weight:800; color:#ffb84d; letter-spacing:2px; }
+  #mute { background:#2a2018; color:#cdb894; border:1px solid #4a3a26; border-radius:8px; font-size:10px; font-weight:700; padding:6px 8px; cursor:pointer; letter-spacing:1px; }
+  canvas { display:block; border-radius:14px; touch-action:none; background:#1a130c; }
+  #overlay { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:rgba(12,8,4,.78); z-index:5; border-radius:14px; }
+  #panel { background:#241a10; border:1px solid #4a3620; border-radius:18px; padding:26px 32px; text-align:center; color:#fff; max-width:86%; }
+  #panel h2 { font-size:24px; margin-bottom:8px; color:#ffd76a; letter-spacing:1px; }
+  #panel p { color:#bfae93; font-size:13px; line-height:1.55; margin-bottom:14px; }
+  #panel .final { font-size:32px; font-weight:900; color:#ffb84d; margin-bottom:16px; }
+  #mainBtn { background:linear-gradient(135deg,#ffb84d,#ff6a3d); color:#3a1c08; border:none; border-radius:12px; padding:12px 38px; font-size:16px; font-weight:900; cursor:pointer; letter-spacing:1px; }
+  #mainBtn:active { transform:scale(.97); }
+  #footer { color:#6e5f4c; font-size:11px; padding:6px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <div class="stat"><div class="label">SCORE</div><div class="val" id="score">0</div></div>
+    <div id="title">BLADE TOSS</div>
+    <div class="stat"><div class="label">LEVEL</div><div class="val" id="level">1</div></div>
+    <div class="stat"><div class="label">BEST</div><div class="val" id="best">0</div></div>
+    <button id="mute">SOUND ON</button>
+  </div>
+  <div style="position:relative">
+    <canvas id="game"></canvas>
+    <div id="overlay"><div id="panel">
+      <h2 id="ovTitle">Blade Toss</h2>
+      <p id="ovText">Throw knives into the spinning log.</p>
+      <div class="final" id="finalScore">0</div>
+      <button id="mainBtn">PLAY</button>
+    </div></div>
+  </div>
+  <div id="footer">Blade Toss — a free knife throwing game</div>
+</div>
+<script>
+"use strict";
+/* ===================== 画布与自适应 ===================== */
+var W = 480, H = 700;
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+var dpr = Math.min(window.devicePixelRatio || 1, 2);
+canvas.width = W * dpr; canvas.height = H * dpr;
+ctx.scale(dpr, dpr);
+
+// 画布自适应：竖屏优先，同时受视口宽高与 HUD/页脚高度约束
+function fitCanvas() {
+  try {
+    var hud = document.getElementById("hud");
+    var foot = document.getElementById("footer");
+    var aw = Math.min(window.innerWidth || W, W) - 8;
+    var ah = (window.innerHeight || H) - (hud ? hud.offsetHeight : 44) - (foot ? foot.offsetHeight : 22) - 20;
+    var s = Math.max(0.35, Math.min(aw / W, ah / H, 1));
+    canvas.style.width = Math.round(W * s) + "px";
+    canvas.style.height = Math.round(H * s) + "px";
+  } catch (e) {}
+}
+window.addEventListener("resize", fitCanvas);
+window.addEventListener("load", fitCanvas);
+
+/* ===================== 常量与状态 ===================== */
+var LOG_Y = 252;           // 木桩圆心 y
+var KNIFE_Y = H - 96;      // 手中刀刀尖 y（投掷起点）
+var FLY_SPEED = 2050;      // 飞行速度 px/s
+var BLADE_L = 54;          // 刀刃长
+var HANDLE_L = 34;         // 刀柄长
+var KNIFE_W = 13;          // 刀宽
+var APPLE_THRESH = 0.52;   // 苹果判定角宽（弧度）
+
+var state = "MENU";        // MENU | PLAY | CLEAR | OVER
+var score = 0, best = 0, bestLevel = 0, level = 1;
+var target = 0, knivesStuck = 0;
+var ready = true;          // 手上是否有刀
+var fly = null;            // 飞行中的刀 {y, prevY}
+var hitstop = 0;           // 命中顿帧剩余秒数（冻结物理，不冻结输入）
+var clearT = 0, overT = 0;
+var overlayShown = false, gameplayStarted = false;
+var particles = [], floats = [];
+var shake = 0, flash = 0, muted = false, now = 0;
+var log = null;            // 木桩对象
+
+try { best = parseInt(localStorage.getItem("bt_best") || "0", 10) || 0; } catch (e) {}
+try { bestLevel = parseInt(localStorage.getItem("bt_bestLevel") || "0", 10) || 0; } catch (e) {}
+try { muted = localStorage.getItem("bt_muted") === "1"; } catch (e) {}
+
+/* __UNIT_START__ 纯几何命中判定（单测抽取区，勿加任何 DOM/音频依赖） */
+// 环形角度距离：|a-b| 沿圆环的最短弧（0..π）
+function circDist(a, b) {
+  var d = Math.abs(a - b) % (Math.PI * 2);
+  return d > Math.PI ? Math.PI * 2 - d : d;
+}
+// 命中判定：接触角与已插刀角度差 < 阈值 → 撞刀失败；否则若贴近苹果 → 苹果；否则可插
+function hitJudge(contact, stuck, apples, thresh) {
+  var i;
+  for (i = 0; i < stuck.length; i++) {
+    if (circDist(contact, stuck[i]) < thresh) return { kind: "knife", idx: i };
+  }
+  for (i = 0; i < apples.length; i++) {
+    if (apples[i].alive && circDist(contact, apples[i].a) < APPLE_THRESH) return { kind: "apple", idx: i };
+  }
+  return { kind: null, idx: -1 };
+}
+/* __UNIT_END__ */
+
+function norm(a) { a = a % (Math.PI * 2); return a < 0 ? a + Math.PI * 2 : a; }
+
+// 简易可播种随机（裂纹纹理用，保证每帧一致）
+function mulberry(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    var t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ===================== 关卡配置 ===================== */
+// 每关生成：目标刀数 / 旋转模式 / 判定阈值（随关数收紧）/ 苹果 / Boss
+function levelConfig(n) {
+  var boss = n % 5 === 0;
+  var cfg = {
+    boss: boss,
+    target: Math.min(2 + n + (boss ? 1 : 0), 10),
+    r: boss ? 92 : 74,
+    // Boss 更慢但更狡猾；普通关逐渐加速
+    base: boss ? 1.6 + Math.min(n * 0.03, 0.7) : 2.1 + Math.min(n * 0.16, 2.2),
+    // 判定阈值（弧度）：关卡越深越紧
+    thresh: Math.max(0.26, 0.40 - n * 0.013),
+    // steady 匀速 → pulse 忽快忽慢 → flip 随机反转；boss=chaos（又慢又反复无常）
+    pattern: boss ? "chaos" : (n <= 2 ? "steady" : (Math.random() < 0.5 ? "pulse" : "flip")),
+    seed: Math.floor(Math.random() * 100000)
+  };
+  var apples = [];
+  var nA = boss ? 2 : (Math.random() < 0.55 ? 1 : 0);
+  var guard = 0;
+  while (apples.length < nA && guard++ < 40) {
+    var a = Math.random() * Math.PI * 2;
+    var ok = true;
+    for (var i = 0; i < apples.length; i++) if (circDist(a, apples[i].a) < 1.2) ok = false;
+    if (ok) apples.push({ a: a, alive: true, wobble: Math.random() * 6 });
+  }
+  cfg.apples = apples;
+  return cfg;
+}
+
+/* ===================== 音效（WebAudio 合成） ===================== */
+var actx = null, noiseBuf = null;
+function audio() {
+  try {
+    if (!actx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      actx = new AC();
+      var len = Math.floor(actx.sampleRate * 0.5);
+      noiseBuf = actx.createBuffer(1, len, actx.sampleRate);
+      var d = noiseBuf.getChannelData(0);
+      for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (actx.state === "suspended") actx.resume();
+  } catch (e) { return null; }
+  return actx;
+}
+function tone(freq, dur, type, gainv, slideTo, delay) {
+  if (muted) return;
+  try {
+    var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0);
+    var o = a.createOscillator(), g = a.createGain();
+    o.type = type || "sine";
+    o.frequency.setValueAtTime(freq, t0);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t0 + dur);
+    g.gain.setValueAtTime(gainv || 0.12, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  } catch (e) {}
+}
+function noise(dur, gainv, filterFreq, delay, ftype) {
+  if (muted) return;
+  try {
+    var a = audio(); if (!a || !noiseBuf) return;
+    var t0 = a.currentTime + (delay || 0);
+    var src = a.createBufferSource(); src.buffer = noiseBuf;
+    var f = a.createBiquadFilter(); f.type = ftype || "lowpass"; f.frequency.value = filterFreq || 1200;
+    var g = a.createGain();
+    g.gain.setValueAtTime(gainv || 0.2, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    src.connect(f); f.connect(g); g.connect(a.destination);
+    src.start(t0); src.stop(t0 + dur + 0.02);
+  } catch (e) {}
+}
+function sfxThrow() { noise(0.06, 0.07, 3200, 0, "highpass"); }
+function sfxThunk() { tone(150, 0.1, "triangle", 0.22, 62); noise(0.05, 0.16, 900); }
+function sfxApple() { noise(0.07, 0.16, 4200, 0, "highpass"); tone(880, 0.06, "square", 0.05, 1250); }
+function sfxBurst() { noise(0.4, 0.3, 1400); tone(110, 0.3, "sine", 0.2, 45); }
+function sfxFail() { tone(300, 0.45, "sawtooth", 0.13, 70); noise(0.2, 0.12, 800); }
+function sfxClear() {
+  tone(523, 0.09, "square", 0.07);
+  tone(659, 0.09, "square", 0.07, 0, 0.09);
+  tone(784, 0.16, "square", 0.08, 0, 0.18);
+}
+
+/* ===================== 特效粒子 ===================== */
+function burstFX(x, y, r) {
+  var i, a, s;
+  for (i = 0; i < 30; i++) {
+    a = Math.random() * Math.PI * 2; s = 110 + Math.random() * 260;
+    particles.push({ kind: "chip", x: x + Math.cos(a) * r * 0.5, y: y + Math.sin(a) * r * 0.5, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 90, rot: Math.random() * 6.3, vr: (Math.random() - 0.5) * 14, life: 0.8 + Math.random() * 0.6, size: 4 + Math.random() * 7, color: Math.random() < 0.5 ? "#a5713f" : "#7c4f27" });
+  }
+  for (i = 0; i < 12; i++) {
+    a = Math.random() * Math.PI * 2; s = 60 + Math.random() * 160;
+    particles.push({ kind: "chip", x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 120, rot: Math.random() * 6.3, vr: (Math.random() - 0.5) * 10, life: 1.0 + Math.random() * 0.5, size: 5 + Math.random() * 6, color: "#d9b47f" });
+  }
+}
+function appleFX(x, y) {
+  var i, a, s;
+  for (i = 0; i < 10; i++) {
+    a = Math.random() * Math.PI * 2; s = 60 + Math.random() * 150;
+    particles.push({ kind: "bit", x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60, rot: 0, vr: 0, life: 0.6 + Math.random() * 0.3, size: 2 + Math.random() * 3, color: Math.random() < 0.7 ? "#d43a2f" : "#eae4d8" });
+  }
+  for (i = 0; i < 4; i++) {
+    a = Math.random() * Math.PI * 2; s = 40 + Math.random() * 90;
+    particles.push({ kind: "chip", x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, rot: Math.random() * 6.3, vr: (Math.random() - 0.5) * 8, life: 0.7, size: 4 + Math.random() * 3, color: "#4a8f3c" });
+  }
+}
+function sparkFX(x, y) {
+  var i, a, s;
+  for (i = 0; i < 6; i++) {
+    a = Math.random() * Math.PI * 2; s = 50 + Math.random() * 110;
+    particles.push({ kind: "spark", x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 30, rot: 0, vr: 0, life: 0.25 + Math.random() * 0.15, size: 6 + Math.random() * 6, color: "rgba(255,235,190,.9)" });
+  }
+  for (i = 0; i < 4; i++) {
+    a = Math.random() * Math.PI * 2; s = 30 + Math.random() * 80;
+    particles.push({ kind: "chip", x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 50, rot: Math.random() * 6.3, vr: (Math.random() - 0.5) * 10, life: 0.5, size: 3 + Math.random() * 3, color: "#c08c52" });
+  }
+}
+// 失败：被撞的刀弹飞旋转坠落
+function bounceFX(contact) {
+  var aw = contact + log.ang;
+  particles.push({ kind: "knife", x: log.x + Math.cos(aw) * (log.r + 26), y: log.y + Math.sin(aw) * (log.r + 26), vx: (Math.random() - 0.5) * 220, vy: -300, rot: aw + Math.PI / 2, vr: 6 + Math.random() * 6, life: 1.4, size: 1, color: "#ccc" });
+}
+function floatText(x, y, text, color) { floats.push({ x: x, y: y, text: text, life: 1.0, color: color || "#fff" }); }
+function stepParticles(dt) {
+  for (var i = particles.length - 1; i >= 0; i--) {
+    var p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vy += (p.kind === "knife" ? 760 : 620) * dt;
+    p.rot += p.vr * dt;
+    if (p.y > H + 80) particles.splice(i, 1);
+  }
+}
+function stepFloats(dt) {
+  for (var i = floats.length - 1; i >= 0; i--) {
+    var f = floats[i];
+    f.life -= dt; f.y -= 36 * dt;
+    if (f.life <= 0) floats.splice(i, 1);
+  }
+}
+
+/* ===================== 游戏流程 ===================== */
+function startLevel(n, fromMenu) {
+  level = n;
+  if (!fromMenu && level > bestLevel) {
+    bestLevel = level;
+    try { localStorage.setItem("bt_bestLevel", String(bestLevel)); } catch (e) {}
+  }
+  var cfg = levelConfig(n);
+  target = cfg.target;
+  knivesStuck = 0;
+  ready = true;
+  fly = null;
+  log = {
+    x: W / 2, y: LOG_Y, r: cfg.r, boss: cfg.boss,
+    ang: Math.random() * Math.PI * 2, speed: 0,
+    base: cfg.base, dir: Math.random() < 0.5 ? 1 : -1,
+    pattern: cfg.pattern, flipT: 0.8 + Math.random() * 1.2, phase: 0,
+    seed: cfg.seed, thresh: cfg.thresh, target: cfg.target,
+    apples: cfg.apples, stuck: [], gone: false, pop: 0
+  };
+  floatText(W / 2, LOG_Y - cfg.r - 56, cfg.boss ? "BOSS  LEVEL" : "LEVEL " + n, cfg.boss ? "#ff8a76" : "#ffd76a");
+  updateHUD();
+}
+
+function newGame() {
+  score = 0;
+  particles.length = 0;
+  floats.length = 0;
+  shake = 0; flash = 0; hitstop = 0;
+  overlayShown = false;
+  gameplayStarted = false;
+  startLevel(1, false);
+  state = "PLAY";
+  document.getElementById("overlay").style.display = "none";
+  updateHUD();
+  fitCanvas();
+}
+
+// 投掷：一次一刀；本局首次投掷时通知平台开始计时
+function throwKnife() {
+  if (state !== "PLAY" || !ready) return;
+  ready = false;
+  fly = { y: KNIFE_Y, prevY: KNIFE_Y };
+  if (!gameplayStarted) {
+    gameplayStarted = true;
+    try {
+      if (window.__portal === "crazygames" && window.CrazyGames && window.CrazyGames.SDK) {
+        window.CrazyGames.SDK.game.gameplayStart();
+      }
+    } catch (e) {}
+  }
+  sfxThrow();
+}
+
+// 入桩结算：contact = 刀尖入桩时刻木桩局部接触角（已含插值修正）
+function resolveHit(contact) {
+  var L = log;
+  fly = null;
+  var res = hitJudge(contact, L.stuck, L.apples, L.thresh);
+  if (res.kind === "knife") { fail(contact); return; }
+  var wa = contact + L.ang;
+  var hx = L.x + Math.cos(wa) * (L.r + 8);
+  var hy = L.y + Math.sin(wa) * (L.r + 8);
+  if (res.kind === "apple") {
+    var ap = L.apples[res.idx];
+    ap.alive = false;
+    score += 5;
+    if (score > best) { best = score; try { localStorage.setItem("bt_best", String(best)); } catch (e) {} }
+    floatText(L.x + Math.cos(wa) * (L.r + 26), L.y + Math.sin(wa) * (L.r + 26), "+5", "#8fe388");
+    appleFX(L.x + Math.cos(wa) * (L.r + 4), L.y + Math.sin(wa) * (L.r + 4));
+    sfxApple();
+    hitstop = Math.max(hitstop, 0.05);
+  }
+  L.stuck.push(contact);
+  knivesStuck++;
+  hitstop = Math.max(hitstop, 0.06);   // 命中顿帧 60ms（物理冻结，输入不受影响）
+  sparkFX(hx, hy);
+  sfxThunk();
+  ready = true;
+  updateHUD();
+  if (knivesStuck >= target) levelClear();
+}
+
+function levelClear() {
+  state = "CLEAR";
+  clearT = 0;
+  log.gone = true;
+  var bonus = 10 * level;
+  score += bonus;
+  if (score > best) { best = score; try { localStorage.setItem("bt_best", String(best)); } catch (e) {} }
+  updateHUD();
+  burstFX(log.x, log.y, log.r);
+  floatText(log.x, log.y - 10, "+" + bonus + "  LEVEL " + (level + 1), "#ffd76a");
+  shake = 6;
+  sfxBurst();
+  sfxClear();
+}
+
+function fail(contact) {
+  state = "OVER";
+  overT = 0;
+  overlayShown = false;
+  ready = false;
+  shake = 12;
+  flash = 1;
+  bounceFX(contact);
+  sfxFail();
+  if (score > best) { best = score; try { localStorage.setItem("bt_best", String(best)); } catch (e) {} }
+  if (level > bestLevel) { bestLevel = level; try { localStorage.setItem("bt_bestLevel", String(bestLevel)); } catch (e) {} }
+  updateHUD();
+}
+
+function showGameOver() {
+  overlayShown = true;
+  document.getElementById("ovTitle").textContent = "Game Over";
+  document.getElementById("ovText").textContent = "You hit a stuck knife on level " + level + ". Best level reached: " + bestLevel + ".";
+  document.getElementById("finalScore").textContent = String(score);
+  document.getElementById("finalScore").style.display = "block";
+  document.getElementById("mainBtn").textContent = "PLAY AGAIN";
+  document.getElementById("overlay").style.display = "flex";
+  // 平台埋点：一局结束（各 SDK 已做域名守卫）
+  try {
+    if (window.__portal === "crazygames" && window.CrazyGames && window.CrazyGames.SDK) {
+      window.CrazyGames.SDK.game.gameplayStop();
+      window.CrazyGames.SDK.game.happytime();
+    }
+  } catch (e) {}
+}
+
+function showMenu() {
+  document.getElementById("ovTitle").textContent = "Blade Toss";
+  document.getElementById("ovText").textContent = "Throw knives into the spinning log. Fill it to burst it — but never hit a stuck knife. Apples are worth +5. Boss log every 5th level.";
+  document.getElementById("finalScore").textContent = best > 0 ? "Best " + best : "";
+  document.getElementById("finalScore").style.display = best > 0 ? "block" : "none";
+  document.getElementById("mainBtn").textContent = "PLAY";
+  document.getElementById("overlay").style.display = "flex";
+}
+
+function updateHUD() {
+  document.getElementById("score").textContent = String(score);
+  document.getElementById("level").textContent = String(level);
+  document.getElementById("best").textContent = String(best);
+}
+
+/* ===================== 木桩运动模式 ===================== */
+// steady 匀速 / pulse 忽快忽慢 / flip 随机反转 / chaos（Boss：慢速+频繁反转+大幅变速）
+function logSpeed(dt) {
+  var L = log;
+  L.phase += dt;
+  var sp = L.base;
+  if (L.pattern === "pulse") {
+    sp = L.base * (0.45 + 0.75 * (0.5 + 0.5 * Math.sin(L.phase * 2.6)));
+  } else if (L.pattern === "flip") {
+    L.flipT -= dt;
+    if (L.flipT <= 0) { L.dir *= -1; L.flipT = 0.9 + Math.random() * 1.6; }
+  } else if (L.pattern === "chaos") {
+    L.flipT -= dt;
+    if (L.flipT <= 0) { L.dir *= -1; L.flipT = 0.55 + Math.random() * 1.1; }
+    sp = L.base * (0.5 + 1.4 * (0.5 + 0.5 * Math.sin(L.phase * 3.1)));
+  }
+  return sp * L.dir;
+}
+
+/* ===================== 主循环 ===================== */
+function update(sdt, dt) {
+  if (shake > 0) shake = Math.max(0, shake - dt * 26);
+  if (flash > 0) flash = Math.max(0, flash - dt * 2.2);
+  if (log && log.pop < 1) log.pop = Math.min(1, log.pop + dt * 3.5);
+  // 木桩旋转（hit-stop 期间 sdt=0，自动冻结）
+  if (log && !log.gone && state !== "CLEAR" && sdt > 0) {
+    log.speed = logSpeed(sdt);
+    log.ang = norm(log.ang + log.speed * sdt);
+  }
+  // 飞刀物理：跨入桩沿时插值求入桩瞬间角度，保证判定公平
+  if (fly && state === "PLAY" && sdt > 0) {
+    fly.prevY = fly.y;
+    fly.y -= FLY_SPEED * sdt;
+    var rimY = log.y + log.r;
+    if (fly.y <= rimY && fly.prevY > rimY) {
+      var f = (fly.prevY - rimY) / Math.max(0.0001, fly.prevY - fly.y);
+      var angAtCross = log.ang - (log.speed || 0) * sdt * (1 - f);
+      resolveHit(norm(Math.PI / 2 - angAtCross));
+    }
+  }
+  if (sdt > 0) { stepParticles(sdt); stepFloats(sdt); }
+  if (state === "CLEAR") {
+    clearT += dt;
+    if (clearT >= 0.85) { startLevel(level + 1, false); state = "PLAY"; }
+  }
+  if (state === "OVER" && !overlayShown) {
+    overT += dt;
+    if (overT >= 0.9) showGameOver();
+  }
+}
+
+var last = 0;
+function frame(t) {
+  var raw = Math.min((t - last) / 1000, 0.05);
+  if (!(raw >= 0)) raw = 0;
+  last = t;
+  now += raw;
+  // hit-stop：冻结物理但不阻塞输入（事件监听照常触发，可立即投出下一刀）
+  var sdt = raw;
+  if (hitstop > 0) { hitstop -= raw; if (hitstop < 0) hitstop = 0; sdt = 0; }
+  update(sdt, raw);
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* ===================== 渲染 ===================== */
+function drawKnife() {
+  // 以刀尖为原点、刀身朝 +y（下方）的竖直刀；金属渐变+中线高光
+  var g = ctx.createLinearGradient(-KNIFE_W / 2, 0, KNIFE_W / 2, 0);
+  g.addColorStop(0, "#8f9aa8");
+  g.addColorStop(0.35, "#eef3f8");
+  g.addColorStop(0.55, "#c3ccd6");
+  g.addColorStop(1, "#767f8c");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(KNIFE_W / 2, 10);
+  ctx.lineTo(KNIFE_W / 2, BLADE_L);
+  ctx.lineTo(-KNIFE_W / 2, BLADE_L);
+  ctx.lineTo(-KNIFE_W / 2, 10);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.55)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 3); ctx.lineTo(0, BLADE_L - 2);
+  ctx.stroke();
+  // 护手
+  ctx.fillStyle = "#3c3f46";
+  ctx.fillRect(-KNIFE_W * 0.9, BLADE_L, KNIFE_W * 1.8, 5);
+  // 木柄
+  var hg = ctx.createLinearGradient(-5, 0, 5, 0);
+  hg.addColorStop(0, "#5a3d24"); hg.addColorStop(0.5, "#8a5f38"); hg.addColorStop(1, "#4a2f1a");
+  ctx.fillStyle = hg;
+  ctx.fillRect(-5, BLADE_L + 5, 10, HANDLE_L);
+  ctx.fillStyle = "#2e2e34";
+  ctx.fillRect(-6, BLADE_L + 5 + HANDLE_L, 12, 5);
+}
+
+function drawLog() {
+  var L = log;
+  var e = 1 - Math.pow(1 - L.pop, 3);           // easeOutCubic 出场
+  var r = L.r * (0.4 + 0.6 * e);
+  ctx.save();
+  ctx.translate(L.x, L.y);
+  // 树皮外圈
+  var bark = ctx.createRadialGradient(0, 0, r * 0.55, 0, 0, r);
+  bark.addColorStop(0, L.boss ? "#7c4a28" : "#8a5a34");
+  bark.addColorStop(1, L.boss ? "#4a2812" : "#5d3a1f");
+  ctx.fillStyle = bark;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  // 内圈木材横截面
+  var wood = ctx.createRadialGradient(-r * 0.2, -r * 0.2, 2, 0, 0, r * 0.62);
+  wood.addColorStop(0, "#e2b880"); wood.addColorStop(1, "#c08c52");
+  ctx.fillStyle = wood;
+  ctx.beginPath(); ctx.arc(0, 0, r * 0.62, 0, Math.PI * 2); ctx.fill();
+  // 年轮
+  ctx.strokeStyle = "rgba(96,60,28,.35)";
+  ctx.lineWidth = 1.5;
+  for (var i = 1; i <= 4; i++) {
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.62 * i / 4.6, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // 裂纹（种子固定，随桩旋转）
+  var rand = mulberry(L.seed);
+  ctx.strokeStyle = "rgba(70,40,18,.5)";
+  ctx.lineWidth = 2;
+  for (var c = 0; c < 5; c++) {
+    var a0 = rand() * Math.PI * 2, len = r * (0.25 + rand() * 0.4);
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a0) * r * 0.08, Math.sin(a0) * r * 0.08);
+    ctx.lineTo(Math.cos(a0) * len, Math.sin(a0) * len);
+    ctx.stroke();
+  }
+  // 边缘描边
+  ctx.strokeStyle = "rgba(30,16,6,.55)";
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  if (L.boss) {
+    ctx.strokeStyle = "rgba(255,80,60,.5)";
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, r + 4, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawStuckAll() {
+  var L = log;
+  for (var i = 0; i < L.stuck.length; i++) {
+    var aw = L.stuck[i] + L.ang;              // 局部角 → 世界角
+    var tipR = L.r - 34;
+    ctx.save();
+    ctx.translate(L.x + Math.cos(aw) * tipR, L.y + Math.sin(aw) * tipR);
+    ctx.rotate(aw - Math.PI / 2);             // 刀身沿半径向外，刀尖朝圆心
+    drawKnife();
+    ctx.restore();
+  }
+}
+
+function drawApples() {
+  var L = log;
+  for (var i = 0; i < L.apples.length; i++) {
+    var ap = L.apples[i];
+    if (!ap.alive) continue;
+    var aw = ap.a + L.ang;
+    var rr = L.r + 3;
+    var x = L.x + Math.cos(aw) * rr;
+    var y = L.y + Math.sin(aw) * rr;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(aw - Math.PI / 2);
+    ctx.fillStyle = "#d43a2f";
+    ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#e8635a";
+    ctx.beginPath(); ctx.arc(-3.5, -3.5, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#5a3d1e";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, -10); ctx.quadraticCurveTo(2, -15, 4, -16); ctx.stroke();
+    ctx.fillStyle = "#4a8f3c";
+    ctx.beginPath(); ctx.ellipse(6, -15, 5, 2.4, -0.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawPips() {
+  // 进度小刀：已插满数 / 目标数
+  for (var i = 0; i < target; i++) {
+    var x = 20 + i * 17;
+    ctx.fillStyle = i < knivesStuck ? "#ffd76a" : "rgba(255,235,200,.16)";
+    ctx.beginPath();
+    ctx.moveTo(x, H - 48);
+    ctx.lineTo(x + 3.5, H - 40);
+    ctx.lineTo(x + 3.5, H - 28);
+    ctx.lineTo(x - 3.5, H - 28);
+    ctx.lineTo(x - 3.5, H - 40);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+function drawParticles() {
+  for (var i = 0; i < particles.length; i++) {
+    var p = particles[i];
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 1.6));
+    ctx.translate(p.x, p.y);
+    if (p.kind === "chip") {
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+    } else if (p.kind === "bit") {
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(0, 0, p.size, 0, Math.PI * 2); ctx.fill();
+    } else if (p.kind === "spark") {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-1.5, -p.size / 2, 3, p.size);
+    } else if (p.kind === "knife") {
+      ctx.rotate(p.rot);
+      ctx.scale(0.85, 0.85);
+      drawKnife();
+    }
+    ctx.restore();
+  }
+}
+
+function drawFloats() {
+  for (var i = 0; i < floats.length; i++) {
+    var f = floats[i];
+    ctx.globalAlpha = Math.max(0, Math.min(1, f.life / 0.6));
+    ctx.font = "900 20px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.fillText(f.text, f.x + 2, f.y + 2);
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, f.x, f.y);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function render() {
+  var bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#241a10");
+  bg.addColorStop(0.55, "#191209");
+  bg.addColorStop(1, "#100b06");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  ctx.fillStyle = "rgba(255,180,90,.04)";
+  ctx.fillRect(0, H - 130, W, 130);
+  if (log && !log.gone) {
+    ctx.fillStyle = "rgba(0,0,0,.3)";
+    ctx.beginPath();
+    ctx.ellipse(W / 2, LOG_Y + log.r + 34, log.r * 0.9, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    drawLog();
+    drawStuckAll();
+    drawApples();
+    if (log.boss) {
+      ctx.fillStyle = "#ff5f4a";
+      ctx.font = "900 15px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("B O S S", W / 2, LOG_Y - log.r - 26);
+    }
+  }
+  if (fly) {
+    ctx.save();
+    ctx.translate(W / 2, fly.y);
+    drawKnife();
+    ctx.restore();
+  }
+  if (state === "PLAY" && ready && !fly) {
+    ctx.save();
+    ctx.translate(W / 2, KNIFE_Y + Math.sin(now * 3.2) * 2);
+    drawKnife();
+    ctx.restore();
+  }
+  if (log && state !== "MENU") drawPips();
+  drawParticles();
+  drawFloats();
+  if (state === "PLAY" && level === 1 && knivesStuck === 0 && !fly) {
+    ctx.fillStyle = "rgba(255,230,190," + (0.45 + 0.3 * Math.sin(now * 4)).toFixed(3) + ")";
+    ctx.font = "700 14px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("TAP  /  CLICK  /  SPACE  TO  THROW", W / 2, H - 26);
+  }
+  ctx.restore();
+  if (flash > 0) {
+    ctx.fillStyle = "rgba(255,64,48," + (flash * 0.28).toFixed(3) + ")";
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+/* ===================== 输入 ===================== */
+function primaryAction() {
+  audio();   // 首次交互解锁音频
+  if (state === "MENU") { newGame(); return; }
+  if (state === "PLAY") { throwKnife(); return; }
+  if (state === "OVER" && overlayShown) { newGame(); return; }
+}
+canvas.addEventListener("mousedown", function () { primaryAction(); });
+canvas.addEventListener("touchstart", function (e) { e.preventDefault(); primaryAction(); }, { passive: false });
+document.getElementById("overlay").addEventListener("click", function () { primaryAction(); });
+document.addEventListener("keydown", function (e) {
+  if (e.key === " " || e.key === "ArrowUp" || e.key === "Enter") {
+    e.preventDefault();
+    primaryAction();
+  }
+});
+document.getElementById("mainBtn").addEventListener("click", function (e) { e.stopPropagation(); primaryAction(); });
+
+// 静音开关（记忆到 localStorage）
+var muteBtn = document.getElementById("mute");
+function updateMute() { muteBtn.textContent = muted ? "SOUND OFF" : "SOUND ON"; }
+muteBtn.addEventListener("click", function (e) {
+  e.stopPropagation();
+  muted = !muted;
+  try { localStorage.setItem("bt_muted", muted ? "1" : "0"); } catch (e2) {}
+  updateMute();
+});
+
+/* ===================== 启动 ===================== */
+updateMute();
+startLevel(1, true);
+state = "MENU";
+showMenu();
+updateHUD();
+fitCanvas();
+requestAnimationFrame(frame);
+
+// 调试/测试钩子（不影响游戏逻辑）
+window.__bt = {
+  get state() { return state; },
+  get score() { return score; },
+  get level() { return level; },
+  get ready() { return ready; },
+  get flying() { return !!fly; },
+  get hitstop() { return hitstop; },
+  get stuckCount() { return log ? log.stuck.length : 0; },
+  get log() { return log; },
+  newGame: newGame,
+  throwKnife: throwKnife,
+  hitJudge: hitJudge,
+  circDist: circDist
+};
+</script>
+</body>
+</html>
