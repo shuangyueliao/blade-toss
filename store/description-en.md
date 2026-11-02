@@ -2,10 +2,9 @@
 
 ## Short description (CrazyGames / GameDistribution / itch.io)
 
-Throw knives into the spinning log — but never hit one that's already
-stuck. Fill the meter to burst the log and advance, snag apples for +5,
-and face a big tricky boss log every 5th level. One tap to play, hard
-to master.
+Throw knives into the spinning log — but never hit one already stuck.
+Fill the meter to burst it, snag apples for +5, and survive a tricky
+boss log every 5th level. One tap to play, hard to master.
 
 ## Details
 
